@@ -1,3 +1,5 @@
+// https://www.youtube.com/watch?v=jZSnH33Vkh4
+
 #include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -8,12 +10,18 @@
 #define SAMPLE_RATE 44100
 #define STREAM_BUFFER_SIZE 1024
 #define NUM_OSCILLATORS 128
+#define SAMPLE_DURATION (1.0f / SAMPLE_RATE)
 
 typedef struct
 {
     float phase;
     float phase_stride;
 } Oscillator;
+
+void setOscFrequency(Oscillator *osc, float frequency)
+{
+    osc->phase_stride = frequency * SAMPLE_DURATION;
+}
 
 void updateOsc(Oscillator *osc)
 {
@@ -30,12 +38,14 @@ void zeroSignal(float *signal)
     }
 }
 
+float sineWaveOsc(Oscillator *osc) { return sinf(2.0f * PI * osc->phase); }
+
 void accumulateSignal(float *signal, Oscillator *osc, float amplitude)
 {
     for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++)
     {
         updateOsc(osc);
-        signal[t] += sinf(2.0f * PI * osc->phase) * amplitude;
+        signal[t] += sineWaveOsc(osc) * amplitude;
     }
 }
 
@@ -61,8 +71,8 @@ int main()
     float sample_duration = (1.0f / sample_rate);
 
     Oscillator osc[NUM_OSCILLATORS] = {0};
-    // Oscillator lfo = {.phase = 0.0f, .phase_stride = 100.0f *
-    // sample_duration};
+    Oscillator lfo = {.phase = 0.0f};
+    setOscFrequency(&lfo, 10.0f * STREAM_BUFFER_SIZE);
 
     float signal[STREAM_BUFFER_SIZE];
 
@@ -77,6 +87,9 @@ int main()
         if (IsAudioStreamProcessed(synth_stream))
         {
             zeroSignal(signal);
+            updateOsc(&lfo);
+            float base_freq = 20.0f + (normalized_mouse_x * 50.0f) +
+                              (sineWaveOsc(&lfo) * 10.0f);
 
             // frequency = 220.0f + (sinf(2.0f * PI * lfo.phase) * 50.0f);
 
@@ -84,8 +97,7 @@ int main()
             {
                 if (i % 2 != 0)
                 {
-                    float normalized_index = (float)i / NUM_OSCILLATORS;
-                    float base_freq = 20.0f + (normalized_mouse_x * 50.0f);
+                    // float normalized_index = (float)i / NUM_OSCILLATORS;
                     frequency = base_freq * i;
                     float phase_stride = frequency * sample_duration;
 
