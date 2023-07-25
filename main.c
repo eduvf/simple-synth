@@ -8,9 +8,9 @@
 #include "raylib.h"
 
 #define SAMPLE_RATE 44100
+#define SAMPLE_DURATION (1.0f / SAMPLE_RATE)
 #define STREAM_BUFFER_SIZE 1024
 #define NUM_OSCILLATORS 128
-#define SAMPLE_DURATION (1.0f / SAMPLE_RATE)
 
 typedef struct
 {
@@ -83,8 +83,8 @@ int main()
         Vector2 mouse_pos = GetMousePosition();
         float normalized_mouse_x = mouse_pos.x / (float)width;
         float normalized_mouse_y = mouse_pos.y / (float)height;
-        float base_freq = 20.0f + (normalized_mouse_x * 50.0f);
-        lfo.freq = 3.0f + (normalized_mouse_y * 10.0f);
+        float base_freq = 25.0f + (normalized_mouse_x * 400.0f);
+        lfo.freq = 3.0f + (normalized_mouse_y * 3.0f);
 
         if (IsAudioStreamProcessed(synth_stream))
         {
