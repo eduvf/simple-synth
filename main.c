@@ -1,4 +1,4 @@
-// https://www.youtube.com/watch?v=SmKYWmQQmsk
+// https://www.youtube.com/watch?v=fqUbYIhLTqw
 
 #include <math.h>
 #include <stddef.h>
@@ -12,11 +12,12 @@
 #define SAMPLE_RATE 44100
 #define SAMPLE_DURATION (1.0f / SAMPLE_RATE)
 #define STREAM_BUFFER_SIZE 1024
-#define NUM_OSCILLATORS 4
+#define NUM_OSCILLATORS 1
 
 typedef struct
 {
     float phase;
+    float phase_dt;
     float freq;
     float amp;
 } Oscillator;
@@ -36,9 +37,26 @@ typedef struct
 
 typedef float (*WaveShapeFn)(Oscillator *);
 
+float bandLimitedRippleFx(float phase, float phase_dt)
+{
+    if (phase < phase_dt)
+    {
+        phase /= phase_dt;
+        return phase + phase - phase * phase - 1.0f;
+    }
+    else if (phase > 1.0f - phase_dt)
+    {
+        phase = (phase - 1.0f) / phase_dt;
+        return phase * phase + phase + phase + 1.0f;
+    }
+    else
+        return 0.0f;
+}
+
 void updateOsc(Oscillator *osc, float freq_mod)
 {
-    osc->phase += (osc->freq + freq_mod) * SAMPLE_DURATION;
+    osc->phase_dt = (osc->freq + freq_mod) * SAMPLE_DURATION;
+    osc->phase += osc->phase_dt;
     if (osc->phase < 0.0f)
         osc->phase += 1.0f;
     if (osc->phase >= 1.0f)
@@ -55,7 +73,12 @@ void zeroSignal(float *signal)
 
 float sinWaveOsc(Oscillator *osc) { return sinf(2.0f * PI * osc->phase); }
 
-float sawWaveOsc(Oscillator *osc) { return ((osc->phase * 2.0f) - 1.0f); }
+float sawWaveOsc(Oscillator *osc)
+{
+    float sample = ((osc->phase * 2.0f) - 1.0f);
+    sample -= bandLimitedRippleFx(osc->phase, osc->phase_dt);
+    return sample;
+}
 
 float triWaveOsc(Oscillator *osc)
 {
@@ -67,7 +90,10 @@ float triWaveOsc(Oscillator *osc)
 
 float sqrWaveOsc(Oscillator *osc)
 {
-    return (osc->phase >= 0.5f) ? 1.0f : -1.0f;
+    float sample = (osc->phase < 0.5f) ? 1.0f : -1.0f;
+    sample += bandLimitedRippleFx(osc->phase, osc->phase_dt);
+    sample -= bandLimitedRippleFx(fmod(osc->phase + 0.5f, 1.0f), osc->phase_dt);
+    return sample;
 }
 
 void updateOscArray(WaveShapeFn base_osc_shape_fn, WaveShapeFn lfo_osc_shape_fn,
@@ -75,7 +101,10 @@ void updateOscArray(WaveShapeFn base_osc_shape_fn, WaveShapeFn lfo_osc_shape_fn,
 {
     for (size_t i = 0; i < synth->n_oscillators; i++)
     {
-        osc_array[i].freq = freq;
+        osc_array[i].freq = freq * (i + 1);
+        // prevent aliasing (Nyquist )
+        if (osc_array[i].freq >= (SAMPLE_RATE / 2.0f))
+            continue;
         for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++)
         {
             updateOsc(&synth->lfo, 0.0f);
@@ -92,7 +121,7 @@ void handleAudioStream(AudioStream stream, Synth *synth)
     Vector2 mouse_pos = GetMousePosition();
     float normalized_mouse_x = (mouse_pos.x / SCREEN_WIDTH);
     float normalized_mouse_y = (mouse_pos.y / SCREEN_HEIGHT);
-    float base_freq = 50.0f + (normalized_mouse_x * 400.0f);
+    float base_freq = 50.0f + (normalized_mouse_x * 500.0f);
     synth->lfo.freq = 0.05f + (normalized_mouse_y * 10.0f);
     float audio_frame_duration = 0.0f;
 
@@ -103,11 +132,11 @@ void handleAudioStream(AudioStream stream, Synth *synth)
         updateOscArray(&sinWaveOsc, &sinWaveOsc, synth, synth->sinOsc,
                        base_freq);
         updateOscArray(&sawWaveOsc, &sinWaveOsc, synth, synth->sawOsc,
-                       base_freq * 2.0f);
+                       base_freq);
         updateOscArray(&triWaveOsc, &sinWaveOsc, synth, synth->triOsc,
-                       base_freq * 4.0f);
+                       base_freq);
         updateOscArray(&sqrWaveOsc, &sinWaveOsc, synth, synth->sqrOsc,
-                       base_freq / 2.0f);
+                       base_freq);
         UpdateAudioStream(stream, synth->signal, synth->signal_length);
         synth->audio_frame_duration = GetTime() - audio_frame_start_time;
     }
@@ -149,18 +178,28 @@ int main()
                    .triOsc = triOsc,
                    .sqrOsc = sqrOsc,
                    .n_oscillators = NUM_OSCILLATORS,
-                   .lfo = {.phase = 0.0f, .amp = 0.5f},
+                   .lfo = {.phase = 0.0f, .amp = 0.0f},
                    .signal = signal,
                    .signal_length = STREAM_BUFFER_SIZE,
                    .audio_frame_duration = 0.0f};
 
     for (size_t i = 0; i < NUM_OSCILLATORS; i++)
     {
-        const float amp = (NUM_OSCILLATORS) * (1.0f / NUM_OSCILLATORS) * 0.2f;
-        sinOsc[i].amp = amp * 1.0f;
-        sawOsc[i].amp = amp * 0.75f;
-        triOsc[i].amp = amp * 0.25f;
-        sqrOsc[i].amp = amp * 0.5f;
+        // const float amp = (NUM_OSCILLATORS) * (1.0f / NUM_OSCILLATORS) *
+        // 0.5f;
+        const float amp = 1.0f / (i + 1);
+        // if (i == 0 || i % 2 == 0)
+        // {
+        //     sinOsc[i].amp = amp * 1.0f;
+        // }
+        // else
+        // {
+        //     sinOsc[i].amp = 0.0f;
+        // }
+        sinOsc[i].amp = amp * 0.0f;
+        sawOsc[i].amp = amp * 0.0f;
+        triOsc[i].amp = amp * 0.0f;
+        sqrOsc[i].amp = amp * 1.0f;
     }
 
     while (!WindowShouldClose())
