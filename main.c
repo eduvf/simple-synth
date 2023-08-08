@@ -1,9 +1,12 @@
 // https://www.youtube.com/watch?v=fqUbYIhLTqw
+// 14:00
 
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 
+#define RAYGUI_IMPLEMENTATION
+#include "raygui.h"
 #include "raylib.h"
 
 #define SCREEN_WIDTH 800
@@ -161,6 +164,8 @@ int main()
     SetTargetFPS(120);
     InitAudioDevice();
 
+    GuiLoadStyle("./cyber/cyber.rgs");
+
     unsigned int sample_rate = SAMPLE_RATE;
     SetAudioStreamBufferSizeDefault(STREAM_BUFFER_SIZE);
     AudioStream synth_stream =
@@ -185,22 +190,14 @@ int main()
 
     for (size_t i = 0; i < NUM_OSCILLATORS; i++)
     {
-        // const float amp = (NUM_OSCILLATORS) * (1.0f / NUM_OSCILLATORS) *
-        // 0.5f;
         const float amp = 1.0f / (i + 1);
-        // if (i == 0 || i % 2 == 0)
-        // {
-        //     sinOsc[i].amp = amp * 1.0f;
-        // }
-        // else
-        // {
-        //     sinOsc[i].amp = 0.0f;
-        // }
         sinOsc[i].amp = amp * 0.0f;
         sawOsc[i].amp = amp * 0.0f;
         triOsc[i].amp = amp * 0.0f;
         sqrOsc[i].amp = amp * 1.0f;
     }
+
+    const float panel_width = width / 4.0f;
 
     while (!WindowShouldClose())
     {
@@ -208,6 +205,9 @@ int main()
 
         BeginDrawing();
         ClearBackground(BLACK);
+
+        GuiGrid((Rectangle){0, 0, width, height}, "hi", height / 10.0f, 2, 0);
+        GuiPanel((Rectangle){0, 0, panel_width, height}, "Panel");
 
         {
             size_t zero_crossing_idx = 0;
@@ -227,21 +227,21 @@ int main()
             {
                 const size_t signal_idx =
                     (point_idx + zero_crossing_idx) % STREAM_BUFFER_SIZE;
-                signal_points[point_idx].x = (float)point_idx;
+                signal_points[point_idx].x = (float)point_idx + panel_width;
                 signal_points[point_idx].y =
                     screen_vert_midpoint + (int)(signal[signal_idx] * 100);
             }
-            DrawLine(0, screen_vert_midpoint, SCREEN_WIDTH,
-                     screen_vert_midpoint, DARKGRAY);
+            // DrawLine(0, screen_vert_midpoint, SCREEN_WIDTH,
+            //          screen_vert_midpoint, DARKGRAY);
             DrawLineStrip(signal_points, STREAM_BUFFER_SIZE - zero_crossing_idx,
                           YELLOW);
 
             DrawText(TextFormat("Zero crossing index: %i", zero_crossing_idx),
-                     10, 30, 20, RED);
+                     panel_width + 10, 30, 20, RED);
         }
 
         DrawText(TextFormat("FPS: %i, delta: %f", GetFPS(), GetFrameTime()),
-                 100, 50, 16, RED);
+                 panel_width + 10, 50, 16, RED);
 
         EndDrawing();
     }
