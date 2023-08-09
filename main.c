@@ -36,6 +36,7 @@ typedef struct
     size_t signal_length;
     float audio_frame_duration;
     float base_freq;
+    float base_amp;
 } Synth;
 
 typedef float (*WaveShapeFn)(Oscillator *);
@@ -114,8 +115,8 @@ void updateOscArray(WaveShapeFn base_osc_shape_fn, WaveShapeFn lfo_osc_shape_fn,
             updateOsc(&synth->lfo, 0.0f);
             updateOsc(&osc_array[i],
                       lfo_osc_shape_fn(&synth->lfo) * synth->lfo.amp);
-            synth->signal[t] +=
-                base_osc_shape_fn(&osc_array[i]) * osc_array[i].amp;
+            synth->signal[t] += base_osc_shape_fn(&osc_array[i]) *
+                                osc_array[i].amp * synth->base_amp;
         }
     }
 }
@@ -183,7 +184,8 @@ int main()
                    .signal = signal,
                    .signal_length = STREAM_BUFFER_SIZE,
                    .audio_frame_duration = 0.0f,
-                   .base_freq = 440.0f};
+                   .base_freq = 440.0f,
+                   .base_amp = 0.5f};
 
     for (size_t i = 0; i < NUM_OSCILLATORS; i++)
     {
@@ -215,7 +217,7 @@ int main()
             printf("Add synth\n");
         }
 
-        GuiPanel((Rectangle){10, 40, inner_panel_width, 60}, NULL);
+        GuiPanel((Rectangle){10, 40, inner_panel_width, 200}, NULL);
 
         float log_freq = log10f(synth.base_freq);
         GuiLabel((Rectangle){20, 40, inner_panel_width - 20, 20},
@@ -223,6 +225,13 @@ int main()
         GuiSlider((Rectangle){20, 60, inner_panel_width - 20, 20}, NULL, NULL,
                   &log_freq, 0.0f, log10f((float)(SAMPLE_RATE / 2.0f)));
         synth.base_freq = powf(10.0f, log_freq);
+
+        float decibels = 20.0f * log10f(synth.base_amp);
+        GuiLabel((Rectangle){20, 80, inner_panel_width - 20, 20},
+                 TextFormat("Amp (Db): %f", decibels));
+        GuiSlider((Rectangle){20, 100, inner_panel_width - 20, 20}, NULL, NULL,
+                  &decibels, -50.0f, 0.0f);
+        synth.base_amp = powf(10.0f, decibels * (1.0f / 20.0f));
 
         // Draw signal
         size_t zero_crossing_idx = 0;
