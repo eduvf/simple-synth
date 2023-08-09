@@ -227,6 +227,23 @@ void draw_ui(Synth *synth)
                   NULL, NULL, &decibels, -50.0f, 0.0f);
         ui_osc->amp = powf(10.0f, decibels * (1.0f / 20.0f));
 
+        bool delete_btn = GuiButton(
+            (Rectangle){20, y_offset + 120, inner_panel_width - 20, 20}, "X");
+
+        if (delete_btn)
+        {
+            memmove(synth->ui_osc + i, synth->ui_osc + i + 1,
+                    (synth->ui_osc_count - i) * sizeof(UIOsc));
+            synth->ui_osc_count--;
+        }
+    }
+
+    // Another loop for dropdowns (to draw over everything else)
+    for (size_t i = 0; i < synth->ui_osc_count; i++)
+    {
+        UIOsc *ui_osc = &synth->ui_osc[i];
+        const int y_offset = 40 + (i * 160);
+
         // Osc select
         int shape_idx = (int)(ui_osc->shape);
         bool select_click = GuiDropdownBox(
@@ -237,16 +254,6 @@ void draw_ui(Synth *synth)
         if (select_click)
         {
             ui_osc->is_dropdown_open = !ui_osc->is_dropdown_open;
-        }
-
-        bool delete_btn = GuiButton(
-            (Rectangle){20, y_offset + 120, inner_panel_width - 20, 20}, "X");
-
-        if (delete_btn)
-        {
-            memmove(synth->ui_osc + i, synth->ui_osc + i + 1,
-                    (synth->ui_osc_count - i) * sizeof(UIOsc));
-            synth->ui_osc_count--;
         }
     }
 
@@ -266,31 +273,28 @@ void draw_ui(Synth *synth)
         case WaveSin:
         {
             osc = synth->sinOsc + (synth->n_sinOsc++);
-            osc->freq = ui_osc->freq;
-            osc->amp = ui_osc->amp;
             break;
         }
         case WaveSaw:
         {
             osc = synth->sawOsc + (synth->n_sawOsc++);
-            osc->freq = ui_osc->freq;
-            osc->amp = ui_osc->amp;
             break;
         }
         case WaveSqr:
         {
             osc = synth->sqrOsc + (synth->n_sqrOsc++);
-            osc->freq = ui_osc->freq;
-            osc->amp = ui_osc->amp;
             break;
         }
         case WaveTri:
         {
             osc = synth->triOsc + (synth->n_triOsc++);
-            osc->freq = ui_osc->freq;
-            osc->amp = ui_osc->amp;
             break;
         }
+        }
+        if (osc != NULL)
+        {
+            osc->freq = ui_osc->freq;
+            osc->amp = ui_osc->amp;
         }
     }
 }
