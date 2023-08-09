@@ -1,8 +1,10 @@
 // https://www.youtube.com/watch?v=fqUbYIhLTqw
 
 #include <math.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 #define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
@@ -14,7 +16,27 @@
 #define SAMPLE_RATE 44100
 #define SAMPLE_DURATION (1.0f / SAMPLE_RATE)
 #define STREAM_BUFFER_SIZE 1024
-#define NUM_OSCILLATORS 1
+#define NUM_OSCILLATORS 32
+#define MAX_UI_OSC 32
+
+#define LEFT_PANEL_WIDTH (SCREEN_WIDTH / 4.0f)
+
+#define WAVE_SHAPE_OPTIONS "sine;sawtooth;square;triangle"
+typedef enum
+{
+    WaveSin = 0,
+    WaveSaw = 1,
+    WaveSqr = 2,
+    WaveTri = 3
+} WaveShape;
+
+typedef struct
+{
+    float freq;
+    float amp;
+    WaveShape shape;
+    bool is_dropdown_open;
+} UIOsc;
 
 typedef struct
 {
@@ -30,13 +52,17 @@ typedef struct
     Oscillator *sawOsc;
     Oscillator *triOsc;
     Oscillator *sqrOsc;
-    size_t n_oscillators;
+    size_t n_sinOsc;
+    size_t n_sawOsc;
+    size_t n_triOsc;
+    size_t n_sqrOsc;
     Oscillator lfo;
     float *signal;
     size_t signal_length;
     float audio_frame_duration;
-    float base_freq;
-    float base_amp;
+
+    UIOsc ui_osc[MAX_UI_OSC];
+    size_t ui_osc_count;
 } Synth;
 
 typedef float (*WaveShapeFn)(Oscillator *);
@@ -101,11 +127,12 @@ float sqrWaveOsc(Oscillator *osc)
 }
 
 void updateOscArray(WaveShapeFn base_osc_shape_fn, WaveShapeFn lfo_osc_shape_fn,
-                    Synth *synth, Oscillator *osc_array)
+                    Synth *synth, Oscillator *osc_array, int n_oscillators)
 {
-    const float freq = synth->base_freq;
-    for (size_t i = 0; i < synth->n_oscillators; i++)
+    for (size_t i = 0; i < n_oscillators; i++)
     {
+        // const float freq = synth->base_freq;
+        const float freq = osc_array[i].freq;
         osc_array[i].freq = freq * (i + 1);
         // prevent aliasing (Nyquist )
         if (osc_array[i].freq >= (SAMPLE_RATE / 2.0f))
@@ -115,8 +142,10 @@ void updateOscArray(WaveShapeFn base_osc_shape_fn, WaveShapeFn lfo_osc_shape_fn,
             updateOsc(&synth->lfo, 0.0f);
             updateOsc(&osc_array[i],
                       lfo_osc_shape_fn(&synth->lfo) * synth->lfo.amp);
-            synth->signal[t] += base_osc_shape_fn(&osc_array[i]) *
-                                osc_array[i].amp * synth->base_amp;
+            // synth->signal[t] += base_osc_shape_fn(&osc_array[i]) *
+            //                     osc_array[i].amp * synth->base_amp;
+            synth->signal[t] +=
+                base_osc_shape_fn(&osc_array[i]) * osc_array[i].amp;
         }
     }
 }
@@ -134,10 +163,14 @@ void handleAudioStream(AudioStream stream, Synth *synth)
     {
         const float audio_frame_start_time = GetTime();
         zeroSignal(synth->signal);
-        updateOscArray(&sinWaveOsc, &sinWaveOsc, synth, synth->sinOsc);
-        updateOscArray(&sawWaveOsc, &sinWaveOsc, synth, synth->sawOsc);
-        updateOscArray(&triWaveOsc, &sinWaveOsc, synth, synth->triOsc);
-        updateOscArray(&sqrWaveOsc, &sinWaveOsc, synth, synth->sqrOsc);
+        updateOscArray(&sinWaveOsc, &sinWaveOsc, synth, synth->sinOsc,
+                       synth->n_sinOsc);
+        updateOscArray(&sawWaveOsc, &sinWaveOsc, synth, synth->sawOsc,
+                       synth->n_sawOsc);
+        updateOscArray(&triWaveOsc, &sinWaveOsc, synth, synth->triOsc,
+                       synth->n_triOsc);
+        updateOscArray(&sqrWaveOsc, &sinWaveOsc, synth, synth->sqrOsc,
+                       synth->n_sqrOsc);
         UpdateAudioStream(stream, synth->signal, synth->signal_length);
         synth->audio_frame_duration = GetTime() - audio_frame_start_time;
     }
@@ -153,12 +186,118 @@ void accumulateSignal(float *signal, Oscillator *osc, Oscillator *lfo)
     }
 }
 
+void draw_ui(Synth *synth)
+{
+    const int inner_panel_width = LEFT_PANEL_WIDTH - 20;
+
+    // GUI
+    GuiGrid((Rectangle){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT}, "hi",
+            SCREEN_HEIGHT / 10.0f, 2, 0);
+    GuiPanel((Rectangle){0, 0, LEFT_PANEL_WIDTH, SCREEN_HEIGHT}, NULL);
+
+    int add_osc =
+        GuiButton((Rectangle){10, 10, inner_panel_width, 20}, "Add osc");
+    if (add_osc)
+    {
+        printf("Add synth\n");
+        synth->ui_osc_count++;
+    }
+
+    for (size_t i = 0; i < synth->ui_osc_count; i++)
+    {
+        UIOsc *ui_osc = &synth->ui_osc[i];
+        const int y_offset = 40 + (i * 160);
+
+        GuiPanel((Rectangle){10, y_offset, inner_panel_width, 150}, NULL);
+
+        // Freq slider
+        float log_freq = log10f(ui_osc->freq);
+        GuiLabel((Rectangle){20, y_offset, inner_panel_width - 20, 20},
+                 TextFormat("Freq: %f", ui_osc->freq));
+        GuiSlider((Rectangle){20, y_offset + 20, inner_panel_width - 20, 20},
+                  NULL, NULL, &log_freq, 0.0f,
+                  log10f((float)(SAMPLE_RATE / 2.0f)));
+        ui_osc->freq = powf(10.0f, log_freq);
+
+        // Amp slider
+        float decibels = 20.0f * log10f(ui_osc->amp);
+        GuiLabel((Rectangle){20, y_offset + 40, inner_panel_width - 20, 20},
+                 TextFormat("Amp (Db): %f", decibels));
+        GuiSlider((Rectangle){20, y_offset + 60, inner_panel_width - 20, 20},
+                  NULL, NULL, &decibels, -50.0f, 0.0f);
+        ui_osc->amp = powf(10.0f, decibels * (1.0f / 20.0f));
+
+        // Osc select
+        int shape_idx = (int)(ui_osc->shape);
+        bool select_click = GuiDropdownBox(
+            (Rectangle){20, y_offset + 90, inner_panel_width - 20, 20},
+            WAVE_SHAPE_OPTIONS, &shape_idx, ui_osc->is_dropdown_open);
+        ui_osc->shape = (WaveShape)(shape_idx);
+
+        if (select_click)
+        {
+            ui_osc->is_dropdown_open = !ui_osc->is_dropdown_open;
+        }
+
+        bool delete_btn = GuiButton(
+            (Rectangle){20, y_offset + 120, inner_panel_width - 20, 20}, "X");
+
+        if (delete_btn)
+        {
+            memmove(synth->ui_osc + i, synth->ui_osc + i + 1,
+                    (synth->ui_osc_count - i) * sizeof(UIOsc));
+            synth->ui_osc_count--;
+        }
+    }
+
+    // Reset synth
+    synth->n_sinOsc = 0;
+    synth->n_sawOsc = 0;
+    synth->n_sqrOsc = 0;
+    synth->n_triOsc = 0;
+
+    for (size_t i = 0; i < synth->ui_osc_count; i++)
+    {
+        UIOsc *ui_osc = &synth->ui_osc[i];
+        Oscillator *osc = NULL;
+
+        switch (ui_osc->shape)
+        {
+        case WaveSin:
+        {
+            osc = synth->sinOsc + (synth->n_sinOsc++);
+            osc->freq = ui_osc->freq;
+            osc->amp = ui_osc->amp;
+            break;
+        }
+        case WaveSaw:
+        {
+            osc = synth->sawOsc + (synth->n_sawOsc++);
+            osc->freq = ui_osc->freq;
+            osc->amp = ui_osc->amp;
+            break;
+        }
+        case WaveSqr:
+        {
+            osc = synth->sqrOsc + (synth->n_sqrOsc++);
+            osc->freq = ui_osc->freq;
+            osc->amp = ui_osc->amp;
+            break;
+        }
+        case WaveTri:
+        {
+            osc = synth->triOsc + (synth->n_triOsc++);
+            osc->freq = ui_osc->freq;
+            osc->amp = ui_osc->amp;
+            break;
+        }
+        }
+    }
+}
+
 int main()
 {
-    const int width = SCREEN_WIDTH;
-    const int height = SCREEN_HEIGHT;
-
-    InitWindow(width, height, "Synth");
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Synth");
     SetTargetFPS(120);
     InitAudioDevice();
 
@@ -179,25 +318,26 @@ int main()
                    .sawOsc = sawOsc,
                    .triOsc = triOsc,
                    .sqrOsc = sqrOsc,
-                   .n_oscillators = NUM_OSCILLATORS,
+                   .n_sinOsc = 0,
+                   .n_sawOsc = 0,
+                   .n_sqrOsc = 0,
+                   .n_triOsc = 0,
                    .lfo = {.phase = 0.0f, .amp = 0.0f},
                    .signal = signal,
                    .signal_length = STREAM_BUFFER_SIZE,
                    .audio_frame_duration = 0.0f,
-                   .base_freq = 440.0f,
-                   .base_amp = 0.5f};
+                   //    .base_freq = 440.0f,
+                   //    .base_amp = 0.5f,
+                   .ui_osc_count = 0};
 
     for (size_t i = 0; i < NUM_OSCILLATORS; i++)
     {
-        const float amp = 1.0f / (i + 1);
-        sinOsc[i].amp = amp * 0.0f;
-        sawOsc[i].amp = amp * 0.0f;
-        triOsc[i].amp = amp * 0.0f;
-        sqrOsc[i].amp = amp * 1.0f;
+        // const float amp = 1.0f / (i + 1);
+        sinOsc[i].amp = 0.0f;
+        sawOsc[i].amp = 0.0f;
+        triOsc[i].amp = 0.0f;
+        sqrOsc[i].amp = 0.0f;
     }
-
-    const float panel_width = width / 4.0f;
-    const int inner_panel_width = panel_width - 20;
 
     while (!WindowShouldClose())
     {
@@ -206,32 +346,7 @@ int main()
         BeginDrawing();
         ClearBackground(BLACK);
 
-        // GUI
-        GuiGrid((Rectangle){0, 0, width, height}, "hi", height / 10.0f, 2, 0);
-        GuiPanel((Rectangle){0, 0, panel_width, height}, NULL);
-
-        int add_osc =
-            GuiButton((Rectangle){10, 10, inner_panel_width, 20}, "Add osc");
-        if (add_osc)
-        {
-            printf("Add synth\n");
-        }
-
-        GuiPanel((Rectangle){10, 40, inner_panel_width, 200}, NULL);
-
-        float log_freq = log10f(synth.base_freq);
-        GuiLabel((Rectangle){20, 40, inner_panel_width - 20, 20},
-                 TextFormat("Freq: %f", synth.base_freq));
-        GuiSlider((Rectangle){20, 60, inner_panel_width - 20, 20}, NULL, NULL,
-                  &log_freq, 0.0f, log10f((float)(SAMPLE_RATE / 2.0f)));
-        synth.base_freq = powf(10.0f, log_freq);
-
-        float decibels = 20.0f * log10f(synth.base_amp);
-        GuiLabel((Rectangle){20, 80, inner_panel_width - 20, 20},
-                 TextFormat("Amp (Db): %f", decibels));
-        GuiSlider((Rectangle){20, 100, inner_panel_width - 20, 20}, NULL, NULL,
-                  &decibels, -50.0f, 0.0f);
-        synth.base_amp = powf(10.0f, decibels * (1.0f / 20.0f));
+        draw_ui(&synth);
 
         // Draw signal
         size_t zero_crossing_idx = 0;
@@ -250,7 +365,7 @@ int main()
         {
             const size_t signal_idx =
                 (point_idx + zero_crossing_idx) % STREAM_BUFFER_SIZE;
-            signal_points[point_idx].x = (float)point_idx + panel_width;
+            signal_points[point_idx].x = (float)point_idx + LEFT_PANEL_WIDTH;
             signal_points[point_idx].y =
                 screen_vert_midpoint + (int)(signal[signal_idx] * 100);
         }
@@ -260,10 +375,10 @@ int main()
                       YELLOW);
 
         DrawText(TextFormat("Zero crossing index: %i", zero_crossing_idx),
-                 panel_width + 10, 30, 20, RED);
+                 LEFT_PANEL_WIDTH + 10, 30, 20, RED);
 
         DrawText(TextFormat("FPS: %i, delta: %f", GetFPS(), GetFrameTime()),
-                 panel_width + 10, 50, 16, RED);
+                 LEFT_PANEL_WIDTH + 10, 50, 16, RED);
 
         EndDrawing();
     }
