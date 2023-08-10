@@ -21,19 +21,21 @@
 
 #define LEFT_PANEL_WIDTH (SCREEN_WIDTH / 4.0f)
 
-#define WAVE_SHAPE_OPTIONS "sine;sawtooth;square;triangle"
+#define WAVE_SHAPE_OPTIONS "sine;sawtooth;square;triangle;rounded square"
 typedef enum
 {
     WaveSin = 0,
     WaveSaw = 1,
     WaveSqr = 2,
-    WaveTri = 3
+    WaveTri = 3,
+    WaveRsq = 4
 } WaveShape;
 
 typedef struct
 {
     float freq;
     float amp;
+    float shape_parm_0;
     WaveShape shape;
     bool is_dropdown_open;
 } UIOsc;
@@ -44,19 +46,20 @@ typedef struct
     float phase_dt;
     float freq;
     float amp;
+    float shape_parm_0;
 } Oscillator;
-
 typedef struct
 {
-    Oscillator *sinOsc;
-    Oscillator *sawOsc;
-    Oscillator *triOsc;
-    Oscillator *sqrOsc;
-    size_t n_sinOsc;
-    size_t n_sawOsc;
-    size_t n_triOsc;
-    size_t n_sqrOsc;
-    Oscillator lfo;
+    Oscillator *osc;
+    size_t count;
+} OscillatorArray;
+typedef struct
+{
+    OscillatorArray sinOsc;
+    OscillatorArray sawOsc;
+    OscillatorArray triOsc;
+    OscillatorArray sqrOsc;
+    OscillatorArray rsqOsc;
     float *signal;
     size_t signal_length;
     float audio_frame_duration;
@@ -65,7 +68,14 @@ typedef struct
     size_t ui_osc_count;
 } Synth;
 
-typedef float (*WaveShapeFn)(Oscillator *);
+typedef float (*WaveShapeFn)(const Oscillator);
+
+Oscillator *makeOscillator(OscillatorArray *osc_arr)
+{
+    return osc_arr->osc + (osc_arr->count++);
+}
+
+void clearOscillatorArray(OscillatorArray *osc_arr) { osc_arr->count = 0; }
 
 float bandLimitedRippleFx(float phase, float phase_dt)
 {
@@ -101,52 +111,70 @@ void zeroSignal(float *signal)
     }
 }
 
-float sinWaveOsc(Oscillator *osc) { return sinf(2.0f * PI * osc->phase); }
+float sinWaveOsc(const Oscillator osc) { return sinf(2.0f * PI * osc.phase); }
 
-float sawWaveOsc(Oscillator *osc)
+float sawWaveOsc(const Oscillator osc)
 {
-    float sample = ((osc->phase * 2.0f) - 1.0f);
-    sample -= bandLimitedRippleFx(osc->phase, osc->phase_dt);
+    float sample = ((osc.phase * 2.0f) - 1.0f);
+    sample -= bandLimitedRippleFx(osc.phase, osc.phase_dt);
     return sample;
 }
 
-float triWaveOsc(Oscillator *osc)
+float triWaveOsc(const Oscillator osc)
 {
-    if (osc->phase < 0.5f)
-        return ((osc->phase * 4.0f) - 1.0f);
+    if (osc.phase < 0.5f)
+        return ((osc.phase * 4.0f) - 1.0f);
     else
-        return ((osc->phase * -4.0f) + 3.0f);
+        return ((osc.phase * -4.0f) + 3.0f);
 }
 
-float sqrWaveOsc(Oscillator *osc)
+float sqrWaveOsc(const Oscillator osc)
 {
-    float sample = (osc->phase < 0.5f) ? 1.0f : -1.0f;
-    sample += bandLimitedRippleFx(osc->phase, osc->phase_dt);
-    sample -= bandLimitedRippleFx(fmod(osc->phase + 0.5f, 1.0f), osc->phase_dt);
+    float duty_cycle = osc.shape_parm_0;
+    float sample = (osc.phase < duty_cycle) ? 1.0f : -1.0f;
+    sample += bandLimitedRippleFx(osc.phase, osc.phase_dt);
+    sample -= bandLimitedRippleFx(fmod(osc.phase + (1.0f - duty_cycle), 1.0f),
+                                  osc.phase_dt);
     return sample;
 }
 
-void updateOscArray(WaveShapeFn base_osc_shape_fn, WaveShapeFn lfo_osc_shape_fn,
-                    Synth *synth, Oscillator *osc_array, int n_oscillators)
+float rsqWaveOsc(const Oscillator osc)
 {
-    for (size_t i = 0; i < n_oscillators; i++)
+    float s = (osc.shape_parm_0 * 8.0f) + 2.0f;
+    float base = (float)fabs(s);
+    float pow = s * sinf(osc.phase * PI * 2);
+    float denominator = powf(base, pow) + 1.0f;
+    float sample = (2.0f / denominator) - 1.0f;
+    return sample;
+}
+
+void updateOscArray(WaveShapeFn base_osc_shape_fn, Synth *synth,
+                    OscillatorArray osc_array)
+{
+    for (size_t i = 0; i < osc_array.count; i++)
     {
-        // const float freq = synth->base_freq;
-        const float freq = osc_array[i].freq;
-        osc_array[i].freq = freq * (i + 1);
         // prevent aliasing (Nyquist )
-        if (osc_array[i].freq >= (SAMPLE_RATE / 2.0f))
+        if (osc_array.osc[i].freq > (SAMPLE_RATE / 2.0f) ||
+            osc_array.osc[i].freq < -(SAMPLE_RATE / 2.0f))
             continue;
         for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++)
         {
-            updateOsc(&synth->lfo, 0.0f);
-            updateOsc(&osc_array[i],
-                      lfo_osc_shape_fn(&synth->lfo) * synth->lfo.amp);
-            // synth->signal[t] += base_osc_shape_fn(&osc_array[i]) *
-            //                     osc_array[i].amp * synth->base_amp;
+            updateOsc(&osc_array.osc[i], 0.0f);
             synth->signal[t] +=
-                base_osc_shape_fn(&osc_array[i]) * osc_array[i].amp;
+                base_osc_shape_fn(osc_array.osc[i]) * osc_array.osc[i].amp;
         }
+        // const float freq = osc_array[i].freq;
+        // osc_array[i].freq = freq * (i + 1);
+        // if (osc_array[i].freq >= (SAMPLE_RATE / 2.0f))
+        //     continue;
+        // for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++)
+        // {
+        //     updateOsc(&synth->lfo, 0.0f);
+        //     updateOsc(&osc_array[i],
+        //               lfo_osc_shape_fn(&synth->lfo) * synth->lfo.amp);
+        //     synth->signal[t] +=
+        //         base_osc_shape_fn(&osc_array[i]) * osc_array[i].amp;
+        // }
     }
 }
 
@@ -163,26 +191,15 @@ void handleAudioStream(AudioStream stream, Synth *synth)
     {
         const float audio_frame_start_time = GetTime();
         zeroSignal(synth->signal);
-        updateOscArray(&sinWaveOsc, &sinWaveOsc, synth, synth->sinOsc,
-                       synth->n_sinOsc);
-        updateOscArray(&sawWaveOsc, &sinWaveOsc, synth, synth->sawOsc,
-                       synth->n_sawOsc);
-        updateOscArray(&triWaveOsc, &sinWaveOsc, synth, synth->triOsc,
-                       synth->n_triOsc);
-        updateOscArray(&sqrWaveOsc, &sinWaveOsc, synth, synth->sqrOsc,
-                       synth->n_sqrOsc);
+
+        updateOscArray(&sinWaveOsc, synth, synth->sinOsc);
+        updateOscArray(&sawWaveOsc, synth, synth->sawOsc);
+        updateOscArray(&triWaveOsc, synth, synth->triOsc);
+        updateOscArray(&sqrWaveOsc, synth, synth->sqrOsc);
+        updateOscArray(&rsqWaveOsc, synth, synth->rsqOsc);
+
         UpdateAudioStream(stream, synth->signal, synth->signal_length);
         synth->audio_frame_duration = GetTime() - audio_frame_start_time;
-    }
-}
-
-void accumulateSignal(float *signal, Oscillator *osc, Oscillator *lfo)
-{
-    for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++)
-    {
-        updateOsc(lfo, 0.0f);
-        updateOsc(osc, sinWaveOsc(lfo));
-        signal[t] += sinWaveOsc(osc);
     }
 }
 
@@ -199,7 +216,6 @@ void draw_ui(Synth *synth)
         GuiButton((Rectangle){10, 10, inner_panel_width, 20}, "Add osc");
     if (add_osc)
     {
-        printf("Add synth\n");
         synth->ui_osc_count++;
     }
 
@@ -255,13 +271,16 @@ void draw_ui(Synth *synth)
         {
             ui_osc->is_dropdown_open = !ui_osc->is_dropdown_open;
         }
+        if (ui_osc->is_dropdown_open)
+            break;
     }
 
     // Reset synth
-    synth->n_sinOsc = 0;
-    synth->n_sawOsc = 0;
-    synth->n_sqrOsc = 0;
-    synth->n_triOsc = 0;
+    clearOscillatorArray(&synth->sinOsc);
+    clearOscillatorArray(&synth->sawOsc);
+    clearOscillatorArray(&synth->sqrOsc);
+    clearOscillatorArray(&synth->triOsc);
+    clearOscillatorArray(&synth->rsqOsc);
 
     for (size_t i = 0; i < synth->ui_osc_count; i++)
     {
@@ -272,22 +291,27 @@ void draw_ui(Synth *synth)
         {
         case WaveSin:
         {
-            osc = synth->sinOsc + (synth->n_sinOsc++);
+            osc = makeOscillator(&synth->sinOsc);
             break;
         }
         case WaveSaw:
         {
-            osc = synth->sawOsc + (synth->n_sawOsc++);
+            osc = makeOscillator(&synth->sawOsc);
             break;
         }
         case WaveSqr:
         {
-            osc = synth->sqrOsc + (synth->n_sqrOsc++);
+            osc = makeOscillator(&synth->sqrOsc);
             break;
         }
         case WaveTri:
         {
-            osc = synth->triOsc + (synth->n_triOsc++);
+            osc = makeOscillator(&synth->triOsc);
+            break;
+        }
+        case WaveRsq:
+        {
+            osc = makeOscillator(&synth->rsqOsc);
             break;
         }
         }
@@ -295,6 +319,7 @@ void draw_ui(Synth *synth)
         {
             osc->freq = ui_osc->freq;
             osc->amp = ui_osc->amp;
+            osc->shape_parm_0 = ui_osc->shape_parm_0;
         }
     }
 }
@@ -317,21 +342,16 @@ int main()
     Oscillator sawOsc[NUM_OSCILLATORS] = {0};
     Oscillator triOsc[NUM_OSCILLATORS] = {0};
     Oscillator sqrOsc[NUM_OSCILLATORS] = {0};
+    Oscillator rsqOsc[NUM_OSCILLATORS] = {0};
     float signal[STREAM_BUFFER_SIZE] = {0};
-    Synth synth = {.sinOsc = sinOsc,
-                   .sawOsc = sawOsc,
-                   .triOsc = triOsc,
-                   .sqrOsc = sqrOsc,
-                   .n_sinOsc = 0,
-                   .n_sawOsc = 0,
-                   .n_sqrOsc = 0,
-                   .n_triOsc = 0,
-                   .lfo = {.phase = 0.0f, .amp = 0.0f},
+    Synth synth = {.sinOsc = {.osc = sinOsc, .count = 0},
+                   .sawOsc = {.osc = sawOsc, .count = 0},
+                   .triOsc = {.osc = triOsc, .count = 0},
+                   .sqrOsc = {.osc = sqrOsc, .count = 0},
+                   .rsqOsc = {.osc = rsqOsc, .count = 0},
                    .signal = signal,
                    .signal_length = STREAM_BUFFER_SIZE,
                    .audio_frame_duration = 0.0f,
-                   //    .base_freq = 440.0f,
-                   //    .base_amp = 0.5f,
                    .ui_osc_count = 0};
 
     for (size_t i = 0; i < NUM_OSCILLATORS; i++)
@@ -341,6 +361,7 @@ int main()
         sawOsc[i].amp = 0.0f;
         triOsc[i].amp = 0.0f;
         sqrOsc[i].amp = 0.0f;
+        rsqOsc[i].amp = 0.0f;
     }
 
     while (!WindowShouldClose())
