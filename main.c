@@ -10,8 +10,8 @@
 #include "raygui.h"
 #include "raylib.h"
 
-#define SCREEN_WIDTH 800
-#define SCREEN_HEIGHT 480
+#define SCREEN_WIDTH 1200
+#define SCREEN_HEIGHT 700
 
 #define SAMPLE_RATE 44100
 #define SAMPLE_DURATION (1.0f / SAMPLE_RATE)
@@ -38,6 +38,7 @@ typedef struct
     float shape_parm_0;
     WaveShape shape;
     bool is_dropdown_open;
+    Rectangle shape_dropdown_rect;
 } UIOsc;
 
 typedef struct
@@ -133,7 +134,7 @@ float sqrWaveOsc(const Oscillator osc)
     float duty_cycle = osc.shape_parm_0;
     float sample = (osc.phase < duty_cycle) ? 1.0f : -1.0f;
     sample += bandLimitedRippleFx(osc.phase, osc.phase_dt);
-    sample -= bandLimitedRippleFx(fmod(osc.phase + (1.0f - duty_cycle), 1.0f),
+    sample -= bandLimitedRippleFx(fmodf(osc.phase + (1.0f - duty_cycle), 1.0f),
                                   osc.phase_dt);
     return sample;
 }
@@ -163,28 +164,11 @@ void updateOscArray(WaveShapeFn base_osc_shape_fn, Synth *synth,
             synth->signal[t] +=
                 base_osc_shape_fn(osc_array.osc[i]) * osc_array.osc[i].amp;
         }
-        // const float freq = osc_array[i].freq;
-        // osc_array[i].freq = freq * (i + 1);
-        // if (osc_array[i].freq >= (SAMPLE_RATE / 2.0f))
-        //     continue;
-        // for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++)
-        // {
-        //     updateOsc(&synth->lfo, 0.0f);
-        //     updateOsc(&osc_array[i],
-        //               lfo_osc_shape_fn(&synth->lfo) * synth->lfo.amp);
-        //     synth->signal[t] +=
-        //         base_osc_shape_fn(&osc_array[i]) * osc_array[i].amp;
-        // }
     }
 }
 
 void handleAudioStream(AudioStream stream, Synth *synth)
 {
-    // Vector2 mouse_pos = GetMousePosition();
-    // float normalized_mouse_x = (mouse_pos.x / SCREEN_WIDTH);
-    // float normalized_mouse_y = (mouse_pos.y / SCREEN_HEIGHT);
-    // synth->base_freq = 50.0f + (normalized_mouse_x * 500.0f);
-    // synth->lfo.freq = 0.05f + (normalized_mouse_y * 10.0f);
     float audio_frame_duration = 0.0f;
 
     if (IsAudioStreamProcessed(stream))
@@ -205,69 +189,107 @@ void handleAudioStream(AudioStream stream, Synth *synth)
 
 void draw_ui(Synth *synth)
 {
-    const int inner_panel_width = LEFT_PANEL_WIDTH - 20;
+    const int panel_x_start = 0;
+    const int panel_y_start = 0;
+    const int panel_width = LEFT_PANEL_WIDTH;
+    const int panel_height = SCREEN_WIDTH;
 
-    // GUI
-    GuiGrid((Rectangle){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT}, "hi",
-            SCREEN_HEIGHT / 10.0f, 2, 0);
-    GuiPanel((Rectangle){0, 0, LEFT_PANEL_WIDTH, SCREEN_HEIGHT}, NULL);
+    bool is_shape_dropdown_open = false;
+    int shape_index = 0;
 
-    int add_osc =
-        GuiButton((Rectangle){10, 10, inner_panel_width, 20}, "Add osc");
-    if (add_osc)
+    GuiGrid((Rectangle){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT}, "grid",
+            SCREEN_HEIGHT / 8.0f, 2, 0);
+    GuiPanel(
+        (Rectangle){panel_x_start, panel_y_start, panel_width, panel_height},
+        NULL);
+
+    bool click_add_oscillator =
+        GuiButton((Rectangle){panel_x_start + 10, panel_y_start + 10,
+                              panel_width - 20, 25},
+                  "Add osc");
+    if (click_add_oscillator)
     {
-        synth->ui_osc_count++;
+        synth->ui_osc_count += 1;
     }
 
-    for (size_t i = 0; i < synth->ui_osc_count; i++)
+    float panel_y_offset = 0;
+    for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i++)
     {
-        UIOsc *ui_osc = &synth->ui_osc[i];
-        const int y_offset = 40 + (i * 160);
+        UIOsc *ui_osc = &synth->ui_osc[ui_osc_i];
+        const bool has_shape_param =
+            (ui_osc->shape == WaveSqr || ui_osc->shape == WaveRsq);
 
-        GuiPanel((Rectangle){10, y_offset, inner_panel_width, 150}, NULL);
+        const int osc_panel_width = panel_width - 20;
+        const int osc_panel_height = has_shape_param ? 130 : 100;
+        const int osc_panel_x = panel_x_start + 10;
+        const int osc_panel_y = panel_y_start + 50 + panel_y_offset;
+        panel_y_offset += osc_panel_height + 5;
+        GuiPanel((Rectangle){osc_panel_x, osc_panel_y, osc_panel_width,
+                             osc_panel_height},
+                 NULL);
 
-        // Freq slider
+        const float slider_padding = 50.f;
+        const float el_spacing = 5.f;
+        Rectangle el_rect = {.x = osc_panel_x + slider_padding + 30,
+                             .y = osc_panel_y + 10,
+                             .width = osc_panel_width - (slider_padding * 2),
+                             .height = 25};
+
+        // Frequency slider
+        char freq_slider_label[16];
+        sprintf(freq_slider_label, "%.1fHz", ui_osc->freq);
         float log_freq = log10f(ui_osc->freq);
-        GuiLabel((Rectangle){20, y_offset, inner_panel_width - 20, 20},
-                 TextFormat("Freq: %f", ui_osc->freq));
-        GuiSlider((Rectangle){20, y_offset + 20, inner_panel_width - 20, 20},
-                  NULL, NULL, &log_freq, 0.0f,
+        GuiSlider(el_rect, freq_slider_label, "", &log_freq, 0.0f,
                   log10f((float)(SAMPLE_RATE / 2.0f)));
-        ui_osc->freq = powf(10.0f, log_freq);
+        ui_osc->freq = powf(10.f, log_freq);
+        el_rect.y += el_rect.height + el_spacing;
 
-        // Amp slider
-        float decibels = 20.0f * log10f(ui_osc->amp);
-        GuiLabel((Rectangle){20, y_offset + 40, inner_panel_width - 20, 20},
-                 TextFormat("Amp (Db): %f", decibels));
-        GuiSlider((Rectangle){20, y_offset + 60, inner_panel_width - 20, 20},
-                  NULL, NULL, &decibels, -50.0f, 0.0f);
-        ui_osc->amp = powf(10.0f, decibels * (1.0f / 20.0f));
+        // Amplitude slider
+        float decibels = (20.f * log10f(ui_osc->amp));
+        char amp_slider_label[32];
+        sprintf(amp_slider_label, "%.1f dB", decibels);
+        GuiSlider(el_rect, amp_slider_label, "", &decibels, -60.0f, 0.0f);
+        ui_osc->amp = powf(10.f, decibels * (1.f / 20.f));
+        el_rect.y += el_rect.height + el_spacing;
 
-        bool delete_btn = GuiButton(
-            (Rectangle){20, y_offset + 120, inner_panel_width - 20, 20}, "X");
-
-        if (delete_btn)
+        // Shape parameter slider
+        if (has_shape_param)
         {
-            memmove(synth->ui_osc + i, synth->ui_osc + i + 1,
-                    (synth->ui_osc_count - i) * sizeof(UIOsc));
-            synth->ui_osc_count--;
+            float shape_param = ui_osc->shape_parm_0;
+            char shape_param_label[32];
+            sprintf(shape_param_label, "%.1f", shape_param);
+            GuiSlider(el_rect, shape_param_label, "", &shape_param, 0.f, 1.f);
+            ui_osc->shape_parm_0 = shape_param;
+            el_rect.y += el_rect.height + el_spacing;
+        }
+
+        // Defer shape drop-down box.
+        ui_osc->shape_dropdown_rect = el_rect;
+        el_rect.y += el_rect.height + el_spacing;
+
+        Rectangle delete_button_rect = el_rect;
+        delete_button_rect.x = osc_panel_x + 5;
+        delete_button_rect.y -= el_rect.height + el_spacing;
+        delete_button_rect.width = 30;
+        bool is_delete_button_pressed = GuiButton(delete_button_rect, "X");
+        if (is_delete_button_pressed)
+        {
+            memmove(synth->ui_osc + ui_osc_i, synth->ui_osc + ui_osc_i + 1,
+                    (synth->ui_osc_count - ui_osc_i) * sizeof(UIOsc));
+            synth->ui_osc_count -= 1;
         }
     }
 
-    // Another loop for dropdowns (to draw over everything else)
-    for (size_t i = 0; i < synth->ui_osc_count; i++)
+    for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i += 1)
     {
-        UIOsc *ui_osc = &synth->ui_osc[i];
-        const int y_offset = 40 + (i * 160);
-
-        // Osc select
-        int shape_idx = (int)(ui_osc->shape);
-        bool select_click = GuiDropdownBox(
-            (Rectangle){20, y_offset + 90, inner_panel_width - 20, 20},
-            WAVE_SHAPE_OPTIONS, &shape_idx, ui_osc->is_dropdown_open);
-        ui_osc->shape = (WaveShape)(shape_idx);
-
-        if (select_click)
+        UIOsc *ui_osc = &synth->ui_osc[ui_osc_i];
+        // Shape select
+        int shape_index = (int)(ui_osc->shape);
+        bool is_dropdown_click =
+            GuiDropdownBox(ui_osc->shape_dropdown_rect, WAVE_SHAPE_OPTIONS,
+                           &shape_index, ui_osc->is_dropdown_open);
+        ui_osc->shape = (WaveShape)(shape_index);
+        if (is_dropdown_click)
         {
             ui_osc->is_dropdown_open = !ui_osc->is_dropdown_open;
         }
@@ -278,15 +300,26 @@ void draw_ui(Synth *synth)
     // Reset synth
     clearOscillatorArray(&synth->sinOsc);
     clearOscillatorArray(&synth->sawOsc);
-    clearOscillatorArray(&synth->sqrOsc);
     clearOscillatorArray(&synth->triOsc);
+    clearOscillatorArray(&synth->sqrOsc);
     clearOscillatorArray(&synth->rsqOsc);
 
-    for (size_t i = 0; i < synth->ui_osc_count; i++)
-    {
-        UIOsc *ui_osc = &synth->ui_osc[i];
-        Oscillator *osc = NULL;
+    // float note_freq = 0;
+    // for (int note_idx = midi_keys.count - 1; note_idx >= 0; note_idx -= 1)
+    // {
+    //     if (midi_keys.data[note_idx].is_on)
+    //     {
+    //         float semitone =
+    //             (float)(midi_keys.data[note_idx].note - BASE_MIDI_NOTE);
+    //         note_freq = getFrequencyForSemitone(semitone);
+    //         break;
+    //     }
+    // }
 
+    for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i++)
+    {
+        UIOsc *ui_osc = &synth->ui_osc[ui_osc_i];
+        Oscillator *osc = NULL;
         switch (ui_osc->shape)
         {
         case WaveSin:
@@ -318,6 +351,7 @@ void draw_ui(Synth *synth)
         if (osc != NULL)
         {
             osc->freq = ui_osc->freq;
+            // osc->freq = note_freq;
             osc->amp = ui_osc->amp;
             osc->shape_parm_0 = ui_osc->shape_parm_0;
         }
