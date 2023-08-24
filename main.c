@@ -1,4 +1,4 @@
-// https://www.youtube.com/watch?v=Ts7tbZTOkWw
+// https://www.youtube.com/watch?v=e-GhSmWmlZ0
 
 #include <math.h>
 #include <stdbool.h>
@@ -18,6 +18,7 @@
 #define STREAM_BUFFER_SIZE 1024
 #define NUM_OSCILLATORS 32
 #define MAX_UI_OSC 32
+#define BASE_NOTE_FREQ 440
 
 #define LEFT_PANEL_WIDTH (SCREEN_WIDTH / 4.0f)
 
@@ -70,6 +71,13 @@ typedef struct
 } Synth;
 
 typedef float (*WaveShapeFn)(const Oscillator);
+
+float semitone2freq(float semitone)
+{
+    return powf(2.0f, semitone / 12.0f) * BASE_NOTE_FREQ;
+}
+
+float freq2semitone(float freq) { return 12.0f * log2f(freq / BASE_NOTE_FREQ); }
 
 Oscillator *makeOscillator(OscillatorArray *osc_arr)
 {
@@ -315,6 +323,21 @@ void draw_ui(Synth *synth)
     //         break;
     //     }
     // }
+    int key = 0;
+    for (int i = 0; i < KEY_NINE - KEY_ONE; i++)
+    {
+        if (IsKeyDown(KEY_ONE + i))
+        {
+            key = KEY_ONE + i;
+            break;
+        }
+    }
+    float note_freq = 0;
+    if (key >= KEY_ONE)
+    {
+        float semitone = (float)(1 + (key - KEY_ONE));
+        note_freq = semitone2freq(semitone);
+    }
 
     for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i++)
     {
@@ -350,8 +373,8 @@ void draw_ui(Synth *synth)
         }
         if (osc != NULL)
         {
-            osc->freq = ui_osc->freq;
-            // osc->freq = note_freq;
+            // osc->freq = ui_osc->freq;
+            osc->freq = note_freq;
             osc->amp = ui_osc->amp;
             osc->shape_parm_0 = ui_osc->shape_parm_0;
         }
