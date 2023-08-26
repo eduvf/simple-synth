@@ -1,4 +1,5 @@
 // https://www.youtube.com/watch?v=e-GhSmWmlZ0
+// 7:45
 
 #include <math.h>
 #include <stdbool.h>
@@ -219,6 +220,12 @@ void draw_ui(Synth *synth)
     if (click_add_oscillator)
     {
         synth->ui_osc_count += 1;
+        // Set defaults
+        UIOsc *ui_osc = synth->ui_osc + (synth->ui_osc_count - 1);
+        ui_osc->shape = WaveSin;
+        ui_osc->freq = BASE_NOTE_FREQ;
+        ui_osc->amp = 0.5f;
+        ui_osc->shape_parm_0 = 0.5f;
     }
 
     float panel_y_offset = 0;
@@ -305,7 +312,10 @@ void draw_ui(Synth *synth)
         if (ui_osc->is_dropdown_open)
             break;
     }
+}
 
+void apply_ui_state(Synth *synth)
+{
     // Reset synth
     clearOscillatorArray(&synth->sinOsc);
     clearOscillatorArray(&synth->sawOsc);
@@ -313,17 +323,6 @@ void draw_ui(Synth *synth)
     clearOscillatorArray(&synth->sqrOsc);
     clearOscillatorArray(&synth->rsqOsc);
 
-    // float note_freq = 0;
-    // for (int note_idx = midi_keys.count - 1; note_idx >= 0; note_idx -= 1)
-    // {
-    //     if (midi_keys.data[note_idx].is_on)
-    //     {
-    //         float semitone =
-    //             (float)(midi_keys.data[note_idx].note - BASE_MIDI_NOTE);
-    //         note_freq = getFrequencyForSemitone(semitone);
-    //         break;
-    //     }
-    // }
     int midi_code = 0;
     int keys_length = sizeof(keys) / sizeof(keys[0]);
     for (int i = 0; i < keys_length; i++)
@@ -434,6 +433,7 @@ int main()
         ClearBackground(BLACK);
 
         draw_ui(&synth);
+        apply_ui_state(&synth);
 
         // Draw signal
         size_t zero_crossing_idx = 0;
