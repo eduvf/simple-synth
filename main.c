@@ -1,5 +1,4 @@
-// https://www.youtube.com/watch?v=e-GhSmWmlZ0
-// 7:45
+// https://www.youtube.com/watch?v=nZ04ETusI9g
 
 #include <math.h>
 #include <stdbool.h>
