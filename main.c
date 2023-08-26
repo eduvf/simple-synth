@@ -323,64 +323,62 @@ void apply_ui_state(Synth *synth)
     clearOscillatorArray(&synth->sqrOsc);
     clearOscillatorArray(&synth->rsqOsc);
 
-    int midi_code = 0;
+    int freq_list[20] = {};
+    int freq_list_p = 0;
     int keys_length = sizeof(keys) / sizeof(keys[0]);
     for (int i = 0; i < keys_length; i++)
     {
         if (IsKeyDown(keys[i].k))
         {
-            midi_code = keys[i].midi;
+            int midi_code = keys[i].midi;
             if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT))
             {
                 midi_code += 12;
             }
-            break;
+            freq_list[freq_list_p++] = midi2freq(midi_code);
         }
-    }
-    float note_freq = 0;
-    if (midi_code > 0)
-    {
-        note_freq = midi2freq(midi_code);
     }
 
     for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i++)
     {
-        UIOsc *ui_osc = &synth->ui_osc[ui_osc_i];
-        Oscillator *osc = NULL;
-        switch (ui_osc->shape)
+        UIOsc ui_osc = synth->ui_osc[ui_osc_i];
+        for (int i = 0; i < freq_list_p; i++)
         {
-        case WaveSin:
-        {
-            osc = makeOscillator(&synth->sinOsc);
-            break;
-        }
-        case WaveSaw:
-        {
-            osc = makeOscillator(&synth->sawOsc);
-            break;
-        }
-        case WaveSqr:
-        {
-            osc = makeOscillator(&synth->sqrOsc);
-            break;
-        }
-        case WaveTri:
-        {
-            osc = makeOscillator(&synth->triOsc);
-            break;
-        }
-        case WaveRsq:
-        {
-            osc = makeOscillator(&synth->rsqOsc);
-            break;
-        }
-        }
-        if (osc != NULL)
-        {
-            // osc->freq = ui_osc->freq;
-            osc->freq = note_freq;
-            osc->amp = ui_osc->amp;
-            osc->shape_parm_0 = ui_osc->shape_parm_0;
+            Oscillator *osc = NULL;
+            switch (ui_osc.shape)
+            {
+            case WaveSin:
+            {
+                osc = makeOscillator(&synth->sinOsc);
+                break;
+            }
+            case WaveSaw:
+            {
+                osc = makeOscillator(&synth->sawOsc);
+                break;
+            }
+            case WaveSqr:
+            {
+                osc = makeOscillator(&synth->sqrOsc);
+                break;
+            }
+            case WaveTri:
+            {
+                osc = makeOscillator(&synth->triOsc);
+                break;
+            }
+            case WaveRsq:
+            {
+                osc = makeOscillator(&synth->rsqOsc);
+                break;
+            }
+            }
+            if (osc != NULL)
+            {
+                osc->freq = freq_list[i];
+                osc->amp = ui_osc.amp;
+                osc->shape_parm_0 = ui_osc.shape_parm_0;
+            }
         }
     }
 }
