@@ -7,6 +7,7 @@
 #include <string.h>
 
 #define RAYGUI_IMPLEMENTATION
+#include "keys.h"
 #include "raygui.h"
 #include "raylib.h"
 
@@ -72,12 +73,12 @@ typedef struct
 
 typedef float (*WaveShapeFn)(const Oscillator);
 
-float semitone2freq(float semitone)
+float midi2freq(float midi)
 {
-    return powf(2.0f, semitone / 12.0f) * BASE_NOTE_FREQ;
+    return powf(2.0f, (midi - 69) / 12.0f) * BASE_NOTE_FREQ;
 }
 
-float freq2semitone(float freq) { return 12.0f * log2f(freq / BASE_NOTE_FREQ); }
+float freq2midi(float freq) { return 12.0f * log2f(freq / BASE_NOTE_FREQ); }
 
 Oscillator *makeOscillator(OscillatorArray *osc_arr)
 {
@@ -323,20 +324,24 @@ void draw_ui(Synth *synth)
     //         break;
     //     }
     // }
-    int key = 0;
-    for (int i = 0; i < KEY_NINE - KEY_ONE; i++)
+    int midi_code = 0;
+    int keys_length = sizeof(keys) / sizeof(keys[0]);
+    for (int i = 0; i < keys_length; i++)
     {
-        if (IsKeyDown(KEY_ONE + i))
+        if (IsKeyDown(keys[i].k))
         {
-            key = KEY_ONE + i;
+            midi_code = keys[i].midi;
+            if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT))
+            {
+                midi_code += 12;
+            }
             break;
         }
     }
     float note_freq = 0;
-    if (key >= KEY_ONE)
+    if (midi_code > 0)
     {
-        float semitone = (float)(1 + (key - KEY_ONE));
-        note_freq = semitone2freq(semitone);
+        note_freq = midi2freq(midi_code);
     }
 
     for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i++)
