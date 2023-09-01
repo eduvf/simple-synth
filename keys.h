@@ -1,12 +1,12 @@
 #include "raylib.h"
 
-struct key
+struct Key
 {
     KeyboardKey k;
     int midi;
 };
 
-struct key keys[] = {
+struct Key KEYS[] = {
     {KEY_Z, 48},     {KEY_S, 49},   {KEY_X, 50},    {KEY_D, 51},
     {KEY_C, 52},     {KEY_V, 53},   {KEY_G, 54},    {KEY_B, 55},
     {KEY_H, 56},     {KEY_N, 57},   {KEY_J, 58},    {KEY_M, 59},
@@ -16,3 +16,5 @@ struct key keys[] = {
     {KEY_U, 71},     {KEY_I, 72},   {KEY_NINE, 73}, {KEY_O, 74},
     {KEY_ZERO, 75},  {KEY_P, 76},
 };
+
+#define KEYS_LENGTH (sizeof(KEYS) / sizeof(KEYS[0]))

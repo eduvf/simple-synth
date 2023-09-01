@@ -1,13 +1,11 @@
-// https://www.youtube.com/watch?v=nZ04ETusI9g
-
 #include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define RAYGUI_IMPLEMENTATION
-#include "keys.h"
 #include "raygui.h"
 #include "raylib.h"
 
@@ -23,17 +21,22 @@
 
 #define LEFT_PANEL_WIDTH (SCREEN_WIDTH / 4.0f)
 
+#include "keys.h"
+
+////////////////////////////////////////////////////////////////
+
 #define WAVE_SHAPE_OPTIONS "sine;sawtooth;square;triangle;rounded square"
-typedef enum
+typedef enum WaveShape
 {
     WaveSin = 0,
     WaveSaw = 1,
     WaveSqr = 2,
     WaveTri = 3,
-    WaveRsq = 4
+    WaveRsq = 4,
+    WaveCount
 } WaveShape;
 
-typedef struct
+typedef struct UIOsc
 {
     float freq;
     float amp;
@@ -41,37 +44,60 @@ typedef struct
     WaveShape shape;
     bool is_dropdown_open;
     Rectangle shape_dropdown_rect;
+    int mod_state;
 } UIOsc;
 
-typedef struct
+typedef struct Oscillator
 {
     float phase;
     float phase_dt;
     float freq;
     float amp;
     float shape_parm_0;
+    float buf[STREAM_BUFFER_SIZE];
+    bool is_mod;
+    size_t ui_id;
 } Oscillator;
-typedef struct
+
+typedef float (*WaveShapeFn)(const float phase, const float phase_dt,
+                             const float shape_parm);
+
+typedef struct OscillatorArray
 {
-    Oscillator *osc;
+    Oscillator osc[NUM_OSCILLATORS];
     size_t count;
+    WaveShapeFn shape_fn;
 } OscillatorArray;
-typedef struct
+
+typedef struct ModulationPair
 {
-    OscillatorArray sinOsc;
-    OscillatorArray sawOsc;
-    OscillatorArray triOsc;
-    OscillatorArray sqrOsc;
-    OscillatorArray rsqOsc;
+    Oscillator *modulator;
+    Oscillator *carrier;
+    size_t mod_id;
+    float mod_ratio;
+} ModulationPair;
+
+typedef struct ModulationPairArray
+{
+    ModulationPair data[NUM_OSCILLATORS];
+    size_t count;
+} ModulationPairArray;
+
+typedef struct Synth
+{
+    OscillatorArray osc_groups[WaveCount];
+    size_t osc_groups_count;
     float *signal;
     size_t signal_length;
     float audio_frame_duration;
 
     UIOsc ui_osc[MAX_UI_OSC];
     size_t ui_osc_count;
+
+    ModulationPairArray mod_pair_array;
 } Synth;
 
-typedef float (*WaveShapeFn)(const Oscillator);
+////////////////////////////////////////////////////////////////
 
 float midi2freq(float midi)
 {
@@ -85,7 +111,33 @@ Oscillator *makeOscillator(OscillatorArray *osc_arr)
     return osc_arr->osc + (osc_arr->count++);
 }
 
-void clearOscillatorArray(OscillatorArray *osc_arr) { osc_arr->count = 0; }
+void updatePhase(float *phase, float *phase_dt, float freq, float freq_mod)
+{
+    *phase_dt = (freq + freq_mod) * SAMPLE_DURATION;
+    *phase += *phase_dt;
+    if (*phase < 0.0f)
+        *phase += 1.0f;
+    if (*phase >= 1.0f)
+        *phase -= 1.0f;
+}
+
+void updatePhaseOsc(Oscillator *osc)
+{
+    osc->phase_dt = osc->freq * SAMPLE_DURATION;
+    osc->phase += osc->phase_dt;
+    if (osc->phase < 0.0f)
+        osc->phase += 1.0f;
+    if (osc->phase >= 1.0f)
+        osc->phase -= 1.0f;
+}
+
+void zeroSignal(float *signal)
+{
+    for (size_t i = 0; i < STREAM_BUFFER_SIZE; i++)
+    {
+        signal[i] = 0.0f;
+    }
+}
 
 float bandLimitedRippleFx(float phase, float phase_dt)
 {
@@ -103,75 +155,156 @@ float bandLimitedRippleFx(float phase, float phase_dt)
         return 0.0f;
 }
 
-void updateOsc(Oscillator *osc, float freq_mod)
+// float sinWaveOsc(const Oscillator osc) { return sinf(2.0f * PI * osc.phase);
+// }
+float sinShape(float phase, float phase_dt, float shape_parm)
 {
-    osc->phase_dt = (osc->freq + freq_mod) * SAMPLE_DURATION;
-    osc->phase += osc->phase_dt;
-    if (osc->phase < 0.0f)
-        osc->phase += 1.0f;
-    if (osc->phase >= 1.0f)
-        osc->phase -= 1.0f;
+    return sinf(2.0f * PI * phase);
 }
 
-void zeroSignal(float *signal)
+// float sawWaveOsc(const Oscillator osc)
+// {
+//     float sample = ((osc.phase * 2.0f) - 1.0f);
+//     sample -= bandLimitedRippleFx(osc.phase, osc.phase_dt);
+//     return sample;
+// }
+float sawShape(float phase, float phase_dt, float shape_parm)
 {
-    for (size_t i = 0; i < STREAM_BUFFER_SIZE; i++)
-    {
-        signal[i] = 0.0f;
-    }
-}
-
-float sinWaveOsc(const Oscillator osc) { return sinf(2.0f * PI * osc.phase); }
-
-float sawWaveOsc(const Oscillator osc)
-{
-    float sample = ((osc.phase * 2.0f) - 1.0f);
-    sample -= bandLimitedRippleFx(osc.phase, osc.phase_dt);
+    float sample = ((phase * 2.0f) - 1.0f);
+    sample -= bandLimitedRippleFx(phase, phase_dt);
     return sample;
 }
 
-float triWaveOsc(const Oscillator osc)
+// float triWaveOsc(const Oscillator osc)
+// {
+//     if (osc.phase < 0.5f)
+//         return ((osc.phase * 4.0f) - 1.0f);
+//     else
+//         return ((osc.phase * -4.0f) + 3.0f);
+// }
+float triShape(float phase, float phase_dt, float shape_parm)
 {
-    if (osc.phase < 0.5f)
-        return ((osc.phase * 4.0f) - 1.0f);
+    if (phase < 0.5f)
+        return (phase * 4.0f) - 1.0f;
     else
-        return ((osc.phase * -4.0f) + 3.0f);
+        return (phase * -4.0f) + 3.0f;
 }
 
-float sqrWaveOsc(const Oscillator osc)
+// float sqrWaveOsc(const Oscillator osc)
+// {
+//     float duty_cycle = osc.shape_parm_0;
+//     float sample = (osc.phase < duty_cycle) ? 1.0f : -1.0f;
+//     sample += bandLimitedRippleFx(osc.phase, osc.phase_dt);
+//     sample -= bandLimitedRippleFx(fmodf(osc.phase + (1.0f -
+//     duty_cycle), 1.0f),
+//                                   osc.phase_dt);
+//     return sample;
+// }
+float sqrShape(float phase, float phase_dt, float shape_parm)
 {
-    float duty_cycle = osc.shape_parm_0;
-    float sample = (osc.phase < duty_cycle) ? 1.0f : -1.0f;
-    sample += bandLimitedRippleFx(osc.phase, osc.phase_dt);
-    sample -= bandLimitedRippleFx(fmodf(osc.phase + (1.0f - duty_cycle), 1.0f),
-                                  osc.phase_dt);
+    float duty_cycle = shape_parm;
+    float sample = (phase < duty_cycle) ? 1.0f : -1.0f;
+    sample += bandLimitedRippleFx(phase, phase_dt);
+    sample -=
+        bandLimitedRippleFx(fmodf(phase + (1.0f - duty_cycle), 1.0f), phase_dt);
     return sample;
 }
 
-float rsqWaveOsc(const Oscillator osc)
+// float rsqWaveOsc(const Oscillator osc)
+// {
+//     float s = (osc.shape_parm_0 * 8.0f) + 2.0f;
+//     float base = (float)fabs(s);
+//     float pow = s * sinf(osc.phase * PI * 2);
+//     float denominator = powf(base, pow) + 1.0f;
+//     float sample = (2.0f / denominator) - 1.0f;
+//     return sample;
+// }
+float rsqShape(float phase, float phase_dt, float shape_parm)
 {
-    float s = (osc.shape_parm_0 * 8.0f) + 2.0f;
+    float s = (shape_parm * 8.0f) + 2.0f;
     float base = (float)fabs(s);
-    float pow = s * sinf(osc.phase * PI * 2);
+    float pow = s * sinf(phase * PI * 2);
     float denominator = powf(base, pow) + 1.0f;
     float sample = (2.0f / denominator) - 1.0f;
     return sample;
 }
 
-void updateOscArray(WaveShapeFn base_osc_shape_fn, Synth *synth,
-                    OscillatorArray osc_array)
+// void updateOsc(Oscillator *osc, float freq_mod)
+// {
+//     osc->phase_dt = (osc->freq + freq_mod) * SAMPLE_DURATION;
+//     osc->phase += osc->phase_dt;
+//     if (osc->phase < 0.0f)
+//         osc->phase += 1.0f;
+//     if (osc->phase >= 1.0f)
+//         osc->phase -= 1.0f;
+// }
+
+// void updateOscArray(WaveShapeFn base_osc_shape_fn, Synth *synth,
+//                     OscillatorArray osc_array)
+// {
+//     for (size_t i = 0; i < osc_array.count; i++)
+//     {
+//         // prevent aliasing (Nyquist )
+//         if (osc_array.osc[i].freq > (SAMPLE_RATE / 2.0f) ||
+//             osc_array.osc[i].freq < -(SAMPLE_RATE / 2.0f))
+//             continue;
+//         for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++)
+//         {
+//             updateOsc(&osc_array.osc[i], 0.0f);
+//             osc_array.osc[i].buf[t] +=
+//                 base_osc_shape_fn(osc_array.osc[i]) * osc_array.osc[i].amp;
+//         }
+//     }
+// }
+void updateOscArray(OscillatorArray *osc_array, ModulationPairArray *mod_array)
 {
-    for (size_t i = 0; i < osc_array.count; i++)
+    for (size_t i = 0; i < osc_array->count; i++)
     {
-        // prevent aliasing (Nyquist )
-        if (osc_array.osc[i].freq > (SAMPLE_RATE / 2.0f) ||
-            osc_array.osc[i].freq < -(SAMPLE_RATE / 2.0f))
+        Oscillator *osc = &(osc_array->osc[i]);
+        if (osc->freq > (SAMPLE_RATE / 2.0f) ||
+            osc->freq < -(SAMPLE_RATE / 2.0f))
             continue;
+        ModulationPair *mod = 0;
+        for (size_t mod_i = 0; mod_i < mod_array->count; mod_i++)
+        {
+            if (mod_array->data[mod_i].carrier == osc)
+            {
+                mod = &mod_array->data[mod_i];
+                break;
+            }
+        }
         for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++)
         {
-            updateOsc(&osc_array.osc[i], 0.0f);
-            synth->signal[t] +=
-                base_osc_shape_fn(osc_array.osc[i]) * osc_array.osc[i].amp;
+            float freq_mod = 0.0f;
+            if (mod)
+            {
+                freq_mod = mod->modulator->buf[t] * mod->mod_ratio;
+            }
+
+            updatePhase(&osc->phase, &osc->phase_dt, osc->freq, freq_mod);
+            float sample = osc_array->shape_fn(osc->phase, osc->phase_dt,
+                                               osc->shape_parm_0);
+            sample *= osc->amp;
+            osc->buf[t] = sample;
+        }
+    }
+}
+
+void accumOscToSignal(Synth *synth)
+{
+    for (size_t i = 0; i < synth->osc_groups_count; i++)
+    {
+        OscillatorArray *osc_array = &synth->osc_groups[i];
+        for (size_t osc_i = 0; osc_i < osc_array->count; osc_i++)
+        {
+            Oscillator *osc = &(osc_array->osc[osc_i]);
+            if (osc->is_mod)
+                continue;
+
+            for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++)
+            {
+                synth->signal[t] += osc->buf[t];
+            }
         }
     }
 }
@@ -185,15 +318,45 @@ void handleAudioStream(AudioStream stream, Synth *synth)
         const float audio_frame_start_time = GetTime();
         zeroSignal(synth->signal);
 
-        updateOscArray(&sinWaveOsc, synth, synth->sinOsc);
-        updateOscArray(&sawWaveOsc, synth, synth->sawOsc);
-        updateOscArray(&triWaveOsc, synth, synth->triOsc);
-        updateOscArray(&sqrWaveOsc, synth, synth->sqrOsc);
-        updateOscArray(&rsqWaveOsc, synth, synth->rsqOsc);
+        for (size_t i = 0; i < synth->osc_groups_count; i++)
+        {
+            OscillatorArray *osc_array = &synth->osc_groups[i];
+            updateOscArray(osc_array, &synth->mod_pair_array);
+        }
+
+        accumOscToSignal(synth);
 
         UpdateAudioStream(stream, synth->signal, synth->signal_length);
         synth->audio_frame_duration = GetTime() - audio_frame_start_time;
     }
+}
+
+void drawSignal(Synth *synth)
+{
+    // Draw signal
+    size_t zero_crossing_idx = 0;
+    for (size_t i = 1; i < synth->signal_length; i++)
+    {
+        if (synth->signal[i] >= 0.0f && synth->signal[i - 1] < 0.0f)
+        {
+            zero_crossing_idx = i;
+            break;
+        }
+    }
+
+    Vector2 signal_points[STREAM_BUFFER_SIZE];
+    const float screen_vert_midpoint = (float)(SCREEN_HEIGHT) / 2;
+    for (size_t p_i = 0; p_i < synth->signal_length; p_i++)
+    {
+        const size_t signal_idx =
+            (p_i + zero_crossing_idx) % STREAM_BUFFER_SIZE;
+        signal_points[p_i].x = (float)p_i + LEFT_PANEL_WIDTH;
+        signal_points[p_i].y =
+            screen_vert_midpoint + (int)(synth->signal[signal_idx] * 100);
+    }
+
+    DrawLineStrip(signal_points, STREAM_BUFFER_SIZE - zero_crossing_idx,
+                  YELLOW);
 }
 
 void draw_ui(Synth *synth)
@@ -216,7 +379,7 @@ void draw_ui(Synth *synth)
         GuiButton((Rectangle){panel_x_start + 10, panel_y_start + 10,
                               panel_width - 20, 25},
                   "Add osc");
-    if (click_add_oscillator)
+    if (click_add_oscillator && synth->ui_osc_count < NUM_OSCILLATORS)
     {
         synth->ui_osc_count += 1;
         // Set defaults
@@ -293,9 +456,21 @@ void draw_ui(Synth *synth)
                     (synth->ui_osc_count - ui_osc_i) * sizeof(UIOsc));
             synth->ui_osc_count -= 1;
         }
+
+        // Mod button
+        Rectangle mod_btn_rect = delete_button_rect;
+        mod_btn_rect.x += 40;
+        const char *mod_btn_text = (ui_osc->mod_state == 0)
+                                       ? "N/A"
+                                       : TextFormat("%d", ui_osc->mod_state);
+        bool mod_btn_pressed = GuiButton(mod_btn_rect, mod_btn_text);
+        if (mod_btn_pressed)
+        {
+            ui_osc->mod_state = (ui_osc->mod_state + 1) % 8;
+        }
     }
 
-    for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i += 1)
+    for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i++)
     {
         UIOsc *ui_osc = &synth->ui_osc[ui_osc_i];
         // Shape select
@@ -316,67 +491,66 @@ void draw_ui(Synth *synth)
 void apply_ui_state(Synth *synth)
 {
     // Reset synth
-    clearOscillatorArray(&synth->sinOsc);
-    clearOscillatorArray(&synth->sawOsc);
-    clearOscillatorArray(&synth->triOsc);
-    clearOscillatorArray(&synth->sqrOsc);
-    clearOscillatorArray(&synth->rsqOsc);
-
-    int freq_list[20] = {};
-    int freq_list_p = 0;
-    int keys_length = sizeof(keys) / sizeof(keys[0]);
-    for (int i = 0; i < keys_length; i++)
+    for (size_t i = 0; i < synth->osc_groups_count; i++)
     {
-        if (IsKeyDown(keys[i].k))
-        {
-            int midi_code = keys[i].midi;
-            if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT))
-            {
-                midi_code += 12;
-            }
-            freq_list[freq_list_p++] = midi2freq(midi_code);
-        }
+        // Clear osc array
+        synth->osc_groups[i].count = 0;
     }
+    synth->mod_pair_array.count = 0;
 
     for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i++)
     {
-        UIOsc ui_osc = synth->ui_osc[ui_osc_i];
-        for (int i = 0; i < freq_list_p; i++)
+        UIOsc *ui_osc = &synth->ui_osc[ui_osc_i];
+
+        for (size_t k = 0; k < KEYS_LENGTH; k++)
         {
+            if (!IsKeyDown(KEYS[k].k))
+                continue;
+
             Oscillator *osc = NULL;
-            switch (ui_osc.shape)
+            if (ui_osc->shape < WaveCount)
             {
-            case WaveSin:
-            {
-                osc = makeOscillator(&synth->sinOsc);
-                break;
+                OscillatorArray *group = &synth->osc_groups[ui_osc->shape];
+                if (group->count < NUM_OSCILLATORS)
+                    osc = makeOscillator(group);
             }
-            case WaveSaw:
-            {
-                osc = makeOscillator(&synth->sawOsc);
-                break;
-            }
-            case WaveSqr:
-            {
-                osc = makeOscillator(&synth->sqrOsc);
-                break;
-            }
-            case WaveTri:
-            {
-                osc = makeOscillator(&synth->triOsc);
-                break;
-            }
-            case WaveRsq:
-            {
-                osc = makeOscillator(&synth->rsqOsc);
-                break;
-            }
-            }
+
             if (osc != NULL)
             {
-                osc->freq = freq_list[i];
-                osc->amp = ui_osc.amp;
-                osc->shape_parm_0 = ui_osc.shape_parm_0;
+                osc->ui_id = ui_osc_i;
+                osc->freq = midi2freq(KEYS[k].midi);
+                osc->amp = ui_osc->amp;
+                osc->shape_parm_0 = ui_osc->shape_parm_0;
+                osc->is_mod = false;
+
+                if (ui_osc->mod_state > 0 &&
+                    (ui_osc->mod_state - 1) < synth->ui_osc_count)
+                {
+                    ModulationPair *mod_pair = synth->mod_pair_array.data +
+                                               synth->mod_pair_array.count++;
+                    mod_pair->modulator = 0;
+                    mod_pair->carrier = osc;
+                    mod_pair->mod_id = ui_osc->mod_state - 1;
+                    mod_pair->mod_ratio = 100.0f;
+                }
+            }
+        }
+    }
+
+    for (size_t mod_i = 0; mod_i < synth->mod_pair_array.count; mod_i++)
+    {
+        ModulationPair *mod_pair = &synth->mod_pair_array.data[mod_i];
+        WaveShape shape_id = synth->ui_osc[mod_pair->mod_id].shape;
+        OscillatorArray *osc_array = &synth->osc_groups[shape_id];
+
+        for (size_t osc_i = 0; osc_i < osc_array->count; osc_i++)
+        {
+            Oscillator *osc = &osc_array->osc[osc_i];
+            if (osc->ui_id == mod_pair->mod_id)
+            {
+                if (mod_pair->modulator == 0)
+                    mod_pair->modulator = osc;
+                osc->is_mod = true;
             }
         }
     }
@@ -384,7 +558,7 @@ void apply_ui_state(Synth *synth)
 
 int main()
 {
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Synth");
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Simple Synth");
     SetTargetFPS(120);
     InitAudioDevice();
 
@@ -396,69 +570,47 @@ int main()
     SetAudioStreamVolume(synth_stream, 0.05f);
     PlayAudioStream(synth_stream);
 
-    Oscillator sinOsc[NUM_OSCILLATORS] = {0};
-    Oscillator sawOsc[NUM_OSCILLATORS] = {0};
-    Oscillator triOsc[NUM_OSCILLATORS] = {0};
-    Oscillator sqrOsc[NUM_OSCILLATORS] = {0};
-    Oscillator rsqOsc[NUM_OSCILLATORS] = {0};
-    float signal[STREAM_BUFFER_SIZE] = {0};
-    Synth synth = {.sinOsc = {.osc = sinOsc, .count = 0},
-                   .sawOsc = {.osc = sawOsc, .count = 0},
-                   .triOsc = {.osc = triOsc, .count = 0},
-                   .sqrOsc = {.osc = sqrOsc, .count = 0},
-                   .rsqOsc = {.osc = rsqOsc, .count = 0},
-                   .signal = signal,
-                   .signal_length = STREAM_BUFFER_SIZE,
-                   .audio_frame_duration = 0.0f,
-                   .ui_osc_count = 0};
+    // Oscillator sinOsc[NUM_OSCILLATORS] = {0};
+    // Oscillator sawOsc[NUM_OSCILLATORS] = {0};
+    // Oscillator triOsc[NUM_OSCILLATORS] = {0};
+    // Oscillator sqrOsc[NUM_OSCILLATORS] = {0};
+    // Oscillator rsqOsc[NUM_OSCILLATORS] = {0};
 
-    for (size_t i = 0; i < NUM_OSCILLATORS; i++)
-    {
-        // const float amp = 1.0f / (i + 1);
-        sinOsc[i].amp = 0.0f;
-        sawOsc[i].amp = 0.0f;
-        triOsc[i].amp = 0.0f;
-        sqrOsc[i].amp = 0.0f;
-        rsqOsc[i].amp = 0.0f;
-    }
+    ModulationPair mod_pairs[256] = {0};
+    float signal[STREAM_BUFFER_SIZE] = {0};
+
+    Synth *synth = (Synth *)malloc(sizeof(Synth));
+
+    synth->osc_groups_count = WaveCount;
+    synth->signal = signal;
+    synth->signal_length = STREAM_BUFFER_SIZE;
+
+    synth->osc_groups[WaveSin].count = 0;
+    synth->osc_groups[WaveSaw].count = 0;
+    synth->osc_groups[WaveTri].count = 0;
+    synth->osc_groups[WaveSqr].count = 0;
+    synth->osc_groups[WaveRsq].count = 0;
+    synth->osc_groups[WaveSin].shape_fn = sinShape;
+    synth->osc_groups[WaveSaw].shape_fn = sawShape;
+    synth->osc_groups[WaveTri].shape_fn = triShape;
+    synth->osc_groups[WaveSqr].shape_fn = sqrShape;
+    synth->osc_groups[WaveRsq].shape_fn = rsqShape;
+
+    synth->mod_pair_array.count = 0;
 
     while (!WindowShouldClose())
     {
-        handleAudioStream(synth_stream, &synth);
+        handleAudioStream(synth_stream, synth);
 
         BeginDrawing();
         ClearBackground(BLACK);
 
-        draw_ui(&synth);
-        apply_ui_state(&synth);
+        draw_ui(synth);
+        apply_ui_state(synth);
+        drawSignal(synth);
 
-        // Draw signal
-        size_t zero_crossing_idx = 0;
-        for (size_t i = 1; i < STREAM_BUFFER_SIZE; i++)
-        {
-            if (signal[i] >= 0.0f && signal[i - 1] < 0.0f)
-            {
-                zero_crossing_idx = i;
-                break;
-            }
-        }
-
-        Vector2 signal_points[STREAM_BUFFER_SIZE];
-        const float screen_vert_midpoint = (float)(SCREEN_HEIGHT) / 2;
-        for (size_t point_idx = 0; point_idx < STREAM_BUFFER_SIZE; point_idx++)
-        {
-            const size_t signal_idx =
-                (point_idx + zero_crossing_idx) % STREAM_BUFFER_SIZE;
-            signal_points[point_idx].x = (float)point_idx + LEFT_PANEL_WIDTH;
-            signal_points[point_idx].y =
-                screen_vert_midpoint + (int)(signal[signal_idx] * 100);
-        }
-        // DrawLine(0, screen_vert_midpoint, SCREEN_WIDTH,
-        //          screen_vert_midpoint, DARKGRAY);
-        DrawLineStrip(signal_points, STREAM_BUFFER_SIZE - zero_crossing_idx,
-                      YELLOW);
-
-        DrawText(TextFormat("Zero crossing index: %i", zero_crossing_idx),
+        DrawText(TextFormat("Fundamental freq: %.1f",
+                            synth->osc_groups[0].osc[0].freq),
                  LEFT_PANEL_WIDTH + 10, 30, 20, RED);
 
         DrawText(TextFormat("FPS: %i, delta: %f", GetFPS(), GetFrameTime()),
