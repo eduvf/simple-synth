@@ -506,6 +506,8 @@ void apply_ui_state(Synth *synth)
         {
             if (!IsKeyDown(KEYS[k].k))
                 continue;
+            bool octave_up =
+                IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
 
             Oscillator *osc = NULL;
             if (ui_osc->shape < WaveCount)
@@ -518,7 +520,7 @@ void apply_ui_state(Synth *synth)
             if (osc != NULL)
             {
                 osc->ui_id = ui_osc_i;
-                osc->freq = midi2freq(KEYS[k].midi);
+                osc->freq = midi2freq(KEYS[k].midi + (12 * (int)octave_up));
                 osc->amp = ui_osc->amp;
                 osc->shape_parm_0 = ui_osc->shape_parm_0;
                 osc->is_mod = false;
