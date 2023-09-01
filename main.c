@@ -410,7 +410,8 @@ void draw_ui(Synth *synth)
         const float el_spacing = 5.f;
         Rectangle el_rect = {.x = osc_panel_x + slider_padding + 30,
                              .y = osc_panel_y + 10,
-                             .width = osc_panel_width - (slider_padding * 2),
+                             .width =
+                                 osc_panel_width - (slider_padding * 2) - 10,
                              .height = 25};
 
         // Frequency slider
@@ -420,6 +421,14 @@ void draw_ui(Synth *synth)
         GuiSlider(el_rect, freq_slider_label, "", &log_freq, 0.0f,
                   log10f((float)(SAMPLE_RATE / 2.0f)));
         ui_osc->freq = powf(10.f, log_freq);
+        // Reset button
+        Rectangle reset_btn_rect = {.x = el_rect.x + el_rect.width + 2,
+                                    .y = el_rect.y,
+                                    .width = 20,
+                                    .height = el_rect.height};
+        bool reset_freq = GuiButton(reset_btn_rect, "R");
+        if (reset_freq)
+            ui_osc->freq = BASE_NOTE_FREQ;
         el_rect.y += el_rect.height + el_spacing;
 
         // Amplitude slider
@@ -519,8 +528,11 @@ void apply_ui_state(Synth *synth)
 
             if (osc != NULL)
             {
+                float base_freq =
+                    midi2freq(KEYS[k].midi + (12 * (int)octave_up));
+                osc->freq = base_freq + (ui_osc->freq - BASE_NOTE_FREQ);
+
                 osc->ui_id = ui_osc_i;
-                osc->freq = midi2freq(KEYS[k].midi + (12 * (int)octave_up));
                 osc->amp = ui_osc->amp;
                 osc->shape_parm_0 = ui_osc->shape_parm_0;
                 osc->is_mod = false;
