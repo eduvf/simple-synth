@@ -43,6 +43,7 @@ typedef struct UIOsc
     float shape_parm_0;
     WaveShape shape;
     bool is_dropdown_open;
+    bool is_kb_enabled;
     Rectangle shape_dropdown_rect;
     int mod_state;
 } UIOsc;
@@ -388,6 +389,7 @@ void draw_ui(Synth *synth)
         ui_osc->freq = BASE_NOTE_FREQ;
         ui_osc->amp = 0.5f;
         ui_osc->shape_parm_0 = 0.5f;
+        ui_osc->is_kb_enabled = true;
     }
 
     float panel_y_offset = 0;
@@ -481,8 +483,7 @@ void draw_ui(Synth *synth)
         Rectangle kb_enable_btn_rect = delete_button_rect;
         kb_enable_btn_rect.x = osc_panel_width - 20 - el_spacing;
         kb_enable_btn_rect.width = 30;
-        bool is_kb_enabled = true;
-        GuiToggle(kb_enable_btn_rect, "ON", &is_kb_enabled);
+        GuiToggle(kb_enable_btn_rect, "ON", &ui_osc->is_kb_enabled);
     }
 
     for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i++)
@@ -534,10 +535,20 @@ void apply_ui_state(Synth *synth)
 
             if (osc != NULL)
             {
-                float base_freq =
-                    midi2freq(KEYS[k].midi + (12 * (int)octave_up));
-                osc->freq = base_freq + (ui_osc->freq - BASE_NOTE_FREQ);
+                float freq;
+                if (ui_osc->is_kb_enabled)
+                {
+                    // float base_freq =
+                    //     midi2freq(KEYS[k].midi + (12 * (int)octave_up));
+                    // freq = base_freq + (ui_osc->freq - BASE_NOTE_FREQ);
+                    freq = midi2freq(KEYS[k].midi + (12 * (int)octave_up));
+                }
+                else
+                {
+                    freq = ui_osc->freq;
+                }
 
+                osc->freq = freq;
                 osc->ui_id = ui_osc_i;
                 osc->amp = ui_osc->amp;
                 osc->shape_parm_0 = ui_osc->shape_parm_0;
