@@ -411,7 +411,7 @@ void draw_ui(Synth *synth)
         Rectangle el_rect = {.x = osc_panel_x + slider_padding + 30,
                              .y = osc_panel_y + 10,
                              .width =
-                                 osc_panel_width - (slider_padding * 2) - 10,
+                                 osc_panel_width - (slider_padding * 2) - 20,
                              .height = 25};
 
         // Frequency slider
@@ -422,10 +422,9 @@ void draw_ui(Synth *synth)
                   log10f((float)(SAMPLE_RATE / 2.0f)));
         ui_osc->freq = powf(10.f, log_freq);
         // Reset button
-        Rectangle reset_btn_rect = {.x = el_rect.x + el_rect.width + 2,
-                                    .y = el_rect.y,
-                                    .width = 20,
-                                    .height = el_rect.height};
+        Rectangle reset_btn_rect = el_rect;
+        reset_btn_rect.x = osc_panel_width - 20 - el_spacing;
+        reset_btn_rect.width = 30;
         bool reset_freq = GuiButton(reset_btn_rect, "R");
         if (reset_freq)
             ui_osc->freq = BASE_NOTE_FREQ;
@@ -477,6 +476,13 @@ void draw_ui(Synth *synth)
         {
             ui_osc->mod_state = (ui_osc->mod_state + 1) % 8;
         }
+
+        // Keyboard enable button
+        Rectangle kb_enable_btn_rect = delete_button_rect;
+        kb_enable_btn_rect.x = osc_panel_width - 20 - el_spacing;
+        kb_enable_btn_rect.width = 30;
+        bool is_kb_enabled = true;
+        GuiToggle(kb_enable_btn_rect, "ON", &is_kb_enabled);
     }
 
     for (size_t ui_osc_i = 0; ui_osc_i < synth->ui_osc_count; ui_osc_i++)
