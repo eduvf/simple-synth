@@ -6,5 +6,5 @@ A simple synthesizer (written in C &amp; using raylib) following locogame's tuto
 
 ## TO-DO
 
-- toggle keyboard control (for each oscillator)
 - mini ADSR for keyboard notes
+- fix freq slider (currently, it's disabled when keyboard input is enabled (on by default))
